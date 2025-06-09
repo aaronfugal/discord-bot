@@ -1,3 +1,27 @@
+"""
+steam_scraper.py
+
+Scrapes detailed game metadata from Steam using the public API.
+Optionally supplements with SteamSpy data. Produces JSON for later import.
+
+Usage:
+    python steam_scraper.py -o games.json
+
+Optional args:
+    -i INPUTFILE --infile      Use existing games JSON as starting point
+    -o OUTPUTFILE --outfile    Output file for scraped data
+    -s SLEEP --sleep           Seconds to wait between requests (default: 3.0)
+    -r RETRIES --retries       How many times to retry on error
+    -a AUTOSAVE --autosave     How often to autosave (default: 100)
+    -d RELEASED --released     Skip known unreleased games
+    -c CURRENCY --currency     Currency code (default: us)
+    -l LANGUAGE --language     Language code (default: en)
+    -p STEAMSPY --steamspy     Include SteamSpy data
+    -u UPDATE --update         Update with APPIDs from CSV file
+
+Note: Steam may block or limit scrapes. Use responsibly.
+"""
+
 import sys
 import os
 import re
