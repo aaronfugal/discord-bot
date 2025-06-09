@@ -1,0 +1,65 @@
+Unfortunately all versions before 1.3.1 were lost, as well as some other versions
+
+1.3.1 - Added codebase to github and provided an initial commit
+1.3.2 - Added new tags to each game in the database including glitchwave, notes, and description tags
+1.4.0 - Added a "game not found" message for the database search
+2.0.0 - Added New feature where the steam store can be searched  
+2.1.2 - Added a past tense function so if the game is already out the bot will adjust the grammar
+2.1.3 - Updated the glitchwave functionality to call the glitchwave function with /glitchwave
+2.1.4 - General codebase clean up
+2.1.5 - Fixed the formatting with the /about command and added a "no game found response" to the glitchwave function
+2.1.7 - Updated the games database
+2.1.9 - Changed the ping symbol to * instead of /
+2.1.10 - Updated the *about message
+2.1.12 - Fixed spelling errors
+2.1.13 - Fixed case sensitivity with *glitchwave command
+2.1.14 - Upgraded the intelligence and word detection and added a game not found in the search function
+2.1.15 - Updated the games database
+2.1.16 - Fixed the *search case sensitivity
+2.2.0 - Added a *all function which prints the database and total database entry count
+2.3.0 - Added a changelog, an instant online/offline message function, and the bots birthday which is it's day of first successful deployment
+2.3.1 - Updated the *about command message and the game database, and modified the format of the *ping command 
+2.3.2 - Updated the database
+2.3.3 - Added functionality for games with an undisclosed release date
+2.3.4 - Updated the game database and fixed organic errors 
+2.3.5 - Updated the intelligence of the word detection, updated the text in the no match response, updated the no game_link tag error, and the formatting of the *all command
+2.3.6 - Added a feature where you can view the changelog, fixed an issue where the * would italicize discord content, and updated the *about content
+2.3.7 - Basic code clean up and grammar corrections
+2.3.8 - Updated the game database
+2.3.9 - Updated the game database
+2.3.10 - Updated the scheduled check function that checks if a game from the database is coming out within 24 hours. The function now checks at 5 P.M. every day instead of checking every 24 hours after the bot is online.
+2.3.11 - Increased the robustness of the release date check function so as to not miss games, updated the game database
+2.3.12 - Rolled back to 2.3.9 and added some tester entries to the database
+2.3.13 - Updated the scheduled check function to check everyday at a specific time, updated the *log command to handle the 2000 character limit in Discord, and updated the game database
+2.4.0 - Major overhaul of the word detection logic, upgraded the *glitchwave function logic, made the *all command print games alphabetically, and updated the *about response
+2.4.1 - Updated the game database 
+2.5.0 - Added the *upcoming function and updated the game database
+2.5.1 - Updated the game database and added functionality for PC specific release dates for games that come out on PC at different times than other platforms, and added functionality to not include a link for games that don't come out on PC
+2.5.2 - Updated the *upcoming command to function as expected, updated the *all command to filter out DLC's, and added a multiple games found error message
+2.5.3 - Updated the game database with corrections and new games, fixed a bug where the reminder of new games function sent the message twice, fixed formatting for long messages by introducing chunks
+2.5.4 - Updated the game database
+2.5.6 - Updated the game database
+2.5.7 - Updated the game database
+3.0.0 - Using a new method to get data, modified code from github author Martin Bustos called scrape.py and csvconversion.py. Database is now generated from a web scraper which outputs html data to a json file and then converts that data to a csv. I also added a database search file to check the csv, json, and get json data straight from steam API. I also created a sql database to query.
+3.0.1 - Got the SQL database running and connected. I can write queries to check the table at will.
+4.0.0 - Can now query the database from Discord
+4.0.1 - Cleaned up the output of the query
+4.1.0 - Added new functions to allow users to add games to the database directly if they do not already exist in the database. Added a scheduling function back and connected to a new database that only users write to.
+4.1.1 - Fixed an issue where multiple games that contain the same word do not return a single search result by allowing the ability to search by app ID
+4.1.2 - Fixed an issue where the daily scheduled check wasn't working
+4.2.0 - Added an automatic feature to remove expired games from the upcoming database. Also added a scraping feature to add new games to the games database daily from Steams "upcoming games"
+4.2.1 - Fixed bugs with the scraping, fixed unsanitized text database writing
+4.2.2 - Added the release date to the listreminder function output
+4.2.3 - Made the bot more descriptive in the *about command and slightly more user friendly
+4.2.4 - More text changes to make more user friendly
+4.2.5 - Updated the sanitizing text function to return human readable text
+4.2.6 - Changed the *listreminders function to list games by release date
+5.0.0 - Users can add movies to the plex server download queue now using the *plex command and the *movieid command. 
+5.0.1 - Updated some formatting and text return.
+5.2.0 - Updated the plex commands to include the ability to add shows as well. This rewrites the previous plex commands so be aware; Provided the bot with more context to help guide users to the correct usage of commands."
+5.2.1 - Adding logging because the daily game database updater was not running
+5.2.2 - Fixed some issues with timezone arithemtic errors causing daily tasks to not run.
+5.2.3 - Fixed some language formatting and ensured that a game is removed from the upcoming database once a release notification is sent.
+5.2.4 - Fixed an issue where the error output for a show that's already been added to the plex download queue didn't specify.
+5.2.5 - Fixed an issue where the bot would ungracefully shutdown so Discord interpreted two instances of the bot running but only one codebase
+5.3.0 - Updated the *search command so that the command silently calls the *fetchgame command and updates the game searched in the database so that the output of *search is real time data queried from the Steam API.
