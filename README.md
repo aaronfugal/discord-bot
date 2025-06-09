@@ -64,11 +64,11 @@
     - Database initialization scripts are provided in `/tools/`.
     - Run the following commands (from repo root):
       ```sh
-      python tools/games_db_init.py --csv games.csv --db games.db
-      python tools/users_db_init.py --db users.db --admin_id <your_discord_id> --admin_username <your_username>
-      python tools/upcoming_db_init.py --db upcoming.db
+      python tools/games_db.py --csv games.csv --db games.db
+      python tools/users_db.py --db users.db --admin_id <your_discord_id> --admin_username <your_username>
+      python tools/upcoming_db.py --db upcoming.db
       ```
-    - **Note:** You must provide a `games.csv` file with the correct columns. See `/tools/games.csv.example` for the required format.
+    - **Note:** You must provide a `games.csv` file with the correct columns. You can get a games.json by running the modified_scrape.py. Then just use a .json to .csv converter script
 
 5. **Run the bot:**
     ```sh

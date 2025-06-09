@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-users_db_init.py
+users_db.py
 
 Initializes users.db for Ingrid Patel Discord Bot, creates the approved_users table,
 and adds an initial admin user.

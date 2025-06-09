@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-games_db_init.py
+games_db.py
 
 Creates and populates games.db for Ingrid Patel Discord Bot from a games.csv file.
 

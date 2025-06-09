@@ -1,5 +1,5 @@
 """
-steam_scraper.py
+modified_scrape.py
 
 Scrapes detailed game metadata from Steam using the public API.
 Optionally supplements with SteamSpy data. Produces JSON for later import.

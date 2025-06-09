@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-upcoming_db_init.py
+upcoming_db.py
 
 Initializes upcoming.db for Ingrid Patel Discord Bot, creating the upcoming_games table.
 
