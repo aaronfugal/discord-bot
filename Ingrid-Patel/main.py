@@ -36,7 +36,9 @@ intents.message_content = True
 # Define the client with the intents
 client = Client(intents=intents)
 
-version = "5.3.0"  # Change this to the version you are working on whenever you modify the code and push to github
+_http = requests.Session()
+
+version = "5.3.1"  # Change this to the version you are working on whenever you modify the code and push to github
 
 specific_channel_id = 1268026496027459715  # Testing channel is 1268026496027459715 and game-recs channel is 1213415936187568128
 
@@ -243,7 +245,7 @@ def add_game_to_upcoming_db(app_id, name, release_date):
 def fetch_game_data(app_id):
     api_url = f"https://store.steampowered.com/api/appdetails?appids={app_id}"
     logging.info(f"Fetching data from URL: {api_url}")  # Log the API URL
-    response = requests.get(api_url)
+    response = _http.get(api_url)
     logging.info(f"Response status code: {response.status_code}")  # Log the response status code
     if response.status_code == 200:
         data = response.json()
@@ -292,7 +294,7 @@ def generate_steam_url(appID):
 async def fetch_single_game(app_id):
     api_url = f"https://store.steampowered.com/api/appdetails?appids={app_id}"
     try:
-        response = requests.get(api_url)
+        response = _http.get(api_url)
         data = response.json()
 
         if str(app_id) in data and data[str(app_id)]['success']:
@@ -314,7 +316,7 @@ async def scrape_upcoming_games():
     upcoming_url = "https://store.steampowered.com/search/?filter=comingsoon&ndl=1"
 
     try:
-        response = requests.get(upcoming_url, timeout=10)
+        response = _http.get(upcoming_url, timeout=10)
         if response.status_code != 200:
             logging.error(f"Failed to fetch upcoming page, status code: {response.status_code}")
             return
@@ -467,7 +469,7 @@ def insert_game_into_db(game_data):
 def get_app_ids(game_name):
     search_url = "https://store.steampowered.com/api/storesearch"
     params = {"term": game_name, "l": "english", "cc": "US"}  # Adjust parameters as needed
-    response = requests.get(search_url, params=params)
+    response = _http.get(search_url, params=params)
     if response.status_code == 200:
         results = response.json().get('items', [])
         top_5_results = [(result['name'], result['id']) for result in results[:5]]  # Return the top 5 results with names and IDs
@@ -800,7 +802,7 @@ def sonarr_add_show(tvdb_id, root_folder, quality_profile_id=1, sonarr_api_url=S
     params = {"term": f"tvdb:{tvdb_id}"}
     logging.info(f"Looking up show: {lookup_url}")
     logging.info(f"Using params: {params}")
-    lookup_response = requests.get(lookup_url, headers=headers, params=params)
+    lookup_response = _http.get(lookup_url, headers=headers, params=params)
 
     if lookup_response.status_code != 200:
         raise Exception(f'Error looking up series: {lookup_response.status_code} - {lookup_response.text}')
@@ -844,37 +846,48 @@ def sonarr_add_show(tvdb_id, root_folder, quality_profile_id=1, sonarr_api_url=S
 
     
 def radarr_search_movies(search_term):
-    url = f"{RADARR_BASE_URL}/api/v3/movie/lookup"
+    url     = f"{RADARR_BASE_URL}/api/v3/movie/lookup"
     headers = {"X-Api-Key": RADARR_API_KEY}
-    params = {"term": search_term}
+    params  = {"term": search_term}
+
+    logging.info(f"[RADARR] GET {url}  params={params}  headers={headers}")
     try:
-        response = requests.get(url, headers=headers, params=params)
-        if response.ok:
-            movies = response.json()
-            return movies  # Assumes the response is a list of movie dicts
-        else:
-            logging.error(f"Radarr search failed, status code: {response.status_code}")
-            return None
-    except Exception as e:
-        logging.error(f"Error searching movies in Radarr: {e}")
+        # send request with a 5s connect / 10s read timeout
+        response = _http.get(url, headers=headers, params=params, timeout=(5, 10))
+        # raise on any HTTP error status (4xx / 5xx)
+        response.raise_for_status()
+
+        movies = response.json()
+        logging.info(f"[RADARR] ← {len(movies)} results")
+        return movies
+
+    except Exception:
+        # logs full traceback so you can see exactly what went wrong
+        logging.exception(f"[RADARR] lookup failed for term={search_term}")
         return None
     
 def sonarr_search_shows(search_term):
-    url = f"{SONARR_BASE_URL}/api/v3/series/lookup"
+    url     = f"{SONARR_BASE_URL}/api/v3/series/lookup"
     headers = {"X-Api-Key": SONARR_API_KEY}
-    params = {"term": search_term}
+    params  = {"term": search_term}
+
+    logging.info(f"[SONARR] GET {url} params={params} headers={headers}")
     try:
-        response = requests.get(url, headers=headers, params=params)
+        # add the same (connect, read) timeout tuple here:
+        response = _http.get(
+            url,
+            headers=headers,
+            params=params,
+            timeout=(5, 10)
+        )
         if response.ok:
-            shows = response.json()
-            return shows  # Expects a list of show dictionaries.
+            return response.json()
         else:
             logging.error(f"Sonarr search failed, status code: {response.status_code}")
             return None
     except Exception as e:
         logging.error(f"Error searching shows in Sonarr: {e}")
         return None
-
 
 
 
