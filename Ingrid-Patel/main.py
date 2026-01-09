@@ -9,6 +9,8 @@ import requests
 import re
 from bs4 import BeautifulSoup
 from ingrid_patel.commands.reminders import handle_addreminder, handle_listreminders
+from ingrid_patel.services.reminder_scheduler import check_and_collect_due_reminders
+
 
 
 # Path setup for cross-platform compatibility
@@ -37,6 +39,45 @@ intents.message_content = True
 
 # Define the client with the intents
 client = Client(intents=intents)
+
+from discord.ext import tasks
+
+@tasks.loop(seconds=60)
+async def reminder_tick():
+    print(f"[reminders] tick; guilds={len(client.guilds)}")
+
+    for guild in client.guilds:
+        rows = check_and_collect_due_reminders(guild.id)
+        if not rows:
+            continue
+
+        # For now: send to the one hardcoded channel you already use
+        channel = client.get_channel(specific_channel_id)
+        if not channel:
+            print(f"[reminders] WARNING: channel {specific_channel_id} not found")
+            continue
+
+        for r in rows:
+            # rows shape depends on what your scheduler returns.
+            # Most likely you have (id, app_id, name, release_at_utc)
+            _, app_id, name, release_at_utc = r
+
+            await channel.send(
+                f"⏰ **Reminder:** `{name}` (Steam AppID `{app_id}`) is releasing soon! "
+                f"(release UTC: `{release_at_utc}`)"
+            )
+
+
+@reminder_tick.before_loop
+async def before_reminder_tick():
+    # make sure discord cache is ready before first tick
+    await client.wait_until_ready()
+    print("[reminders] before_loop: ready")
+
+@reminder_tick.error
+async def reminder_tick_error(exc):
+    print(f"[reminders] ERROR: {exc!r}")
+
 
 _http = requests.Session()
 
@@ -78,6 +119,11 @@ async def on_ready():
         else:
             logging.warning("Channel not found on startup")
         logging.info(f'{client.user} is now running!')
+        if not reminder_tick.is_running():
+            reminder_tick.start()
+
+
+
 
 # STEP 2: DEFINE FUNCTIONS
 
