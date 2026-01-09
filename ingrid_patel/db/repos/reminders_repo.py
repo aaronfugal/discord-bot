@@ -39,7 +39,7 @@ def list_pending_reminders(conn: sqlite3.Connection, now_utc_iso: str) -> List[T
     return cur.fetchall()
 
 
-def list_due_remindsers(conn: sqlite3.Connection, start_utc_iso: str, end_utc_iso: str) -> List[Tuple[int, int, str, str]]:
+def list_due_reminders(conn: sqlite3.Connection, start_utc_iso: str, end_utc_iso: str) -> List[Tuple[int, int, str, str]]:
     """
     Returns reminders that should fire in [start,end], and are not sent.
     Tuple: (id, app_id, name, release_at_utc)
