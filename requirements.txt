@@ -6,3 +6,5 @@ requests
 beautifulsoup4
 python-dotenv
 tzdata
+aiosqlite
+aiohttp

@@ -1,70 +1,154 @@
-import sqlite3
-from datetime import datetime, timezone, timedelta
+# ingrid_patel/commands/reminders.py
 
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from typing import Optional
+
+import aiohttp
+
+from ingrid_patel.clients.steam_client import SteamClient
 from ingrid_patel.db.connect import connect_guild_db
-from ingrid_patel.db.repos.reminders_repo import add_reminder, list_pending_reminders
-from ingrid_patel.utils.time import format_release_mt
+from ingrid_patel.db.repos.reminders_repo import (
+    add_reminder_if_missing,
+    list_upcoming_reminders_for_channel,
+    purge_expired_reminders,
+    list_upcoming_reminders,
+)
+from ingrid_patel.utils.time import parse_steam_release_date
 
 
 def _parse_int(s: str) -> int | None:
-    s = s.strip()
-    if not s.isdigit():
-        return None
-    return int(s)
+    s = (s or "").strip()
+    return int(s) if s.isdigit() else None
 
 
-def handle_addreminder(guild_id: int, author_id: int, content: str) -> str:
+def _db_list_upcoming_sync(*, guild_id: int):
+    conn = connect_guild_db(guild_id)
+    try:
+        purge_expired_reminders(conn)
+        return list_upcoming_reminders(conn)
+    finally:
+        conn.close()
+
+
+async def handle_addreminder(
+    session: aiohttp.ClientSession,
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    content: str,
+) -> str:
     """
-    Expected: "*addreminder <steam_appid> <release_iso_utc>"
-    For now: we require both appid + release time (backend hardcode/testing).
-    We'll add assisted Steam lookup next.
+    Usage:
+      *addreminder <steam_appid>
     """
-    parts = content.split()
-    if len(parts) < 3:
-        return "Usage: *addreminder <steam_appid> <release_iso_utc>\nExample: *addreminder 570 2026-01-10T02:00:00+00:00"
+    parts = (content or "").split()
+    if len(parts) < 2:
+        return "Usage: *addreminder <steam_appid>\nExample: *addreminder 620"
 
     app_id = _parse_int(parts[1])
     if app_id is None:
-        return "App ID must be a number. Example: *addreminder 570 2026-01-10T02:00:00+00:00"
+        return "App ID must be a number. Example: *addreminder 620"
 
-    release_iso = parts[2].strip()
-    try:
-        dt = datetime.fromisoformat(release_iso)
-        if dt.tzinfo is None:
-            return "Release time must include timezone. Use UTC like: 2026-01-10T02:00:00+00:00"
-    except Exception:
-        return "Invalid ISO datetime. Example: 2026-01-10T02:00:00+00:00"
+    return await add_reminder_for_appid(
+        session,
+        guild_id=guild_id,
+        author_id=author_id,
+        channel_id=int(channel_id),
+        app_id=app_id,
+    )
 
-    # name is temporary until assisted lookup exists
-    name = f"Steam App {app_id}"
 
-    conn = connect_guild_db(guild_id)
-    try:
-        add_reminder(
-            conn,
-            app_id=app_id,
-            name=name,
-            release_at_utc=release_iso,
-            created_by_discord_id=str(author_id),
+async def handle_listreminders(ctx) -> str:
+    """
+    Lists upcoming reminders for THIS channel as __UI__:REMINDERS so app.py renders embeds.
+    """
+    if not ctx.guild_id or not ctx.channel_id:
+        return "⚠️ This command only works in a server channel."
+
+    def _db_read():
+        conn = connect_guild_db(int(ctx.guild_id))
+        try:
+            purge_expired_reminders(conn)
+            return list_upcoming_reminders_for_channel(conn, channel_id=int(ctx.channel_id))
+        finally:
+            conn.close()
+
+    rows = await asyncio.to_thread(_db_read)
+
+    items: list[dict[str, object]] = []
+    for (_rid, app_id, name, _release_at_utc, release_date_text, release_precision) in rows:
+        app_id = int(app_id)
+        items.append(
+            {
+                "app_id": app_id,
+                "name": str(name),
+                "release_date_text": (release_date_text or "").strip(),
+                "release_precision": (release_precision or "unknown"),
+                "store_url": f"https://store.steampowered.com/app/{app_id}",
+                "header_image": f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg",
+            }
         )
-    finally:
-        conn.close()
 
-    return f"Added reminder: **{name}** — releases {format_release_mt(release_iso)}"
+    payload = {"channel_id": int(ctx.channel_id), "items": items}
+    return "__UI__:REMINDERS:" + json.dumps(payload, ensure_ascii=False)
 
 
-def handle_listreminders(guild_id: int) -> str:
-    conn = connect_guild_db(guild_id)
+
+async def add_reminder_for_appid(
+    session: aiohttp.ClientSession,
+    *,
+    guild_id: int,
+    author_id: int,
+    channel_id: int,
+    app_id: int,
+) -> str:
+    """
+    Fetch Steam app details and insert a reminder row if missing.
+    Stores:
+      - release_date_text (as displayed by Steam)
+      - release_at_utc (ISO string if we could parse a concrete date)
+      - release_precision (year/month/day/unknown)
+    """
+    steam = SteamClient.from_env(session=session)
+
     try:
-        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        rows = list_pending_reminders(conn, now_iso)
-    finally:
-        conn.close()
+        details = await steam.get_app_details(app_id)
+    except Exception as e:
+        return f"Steam request failed for App ID {app_id}: {e}"
 
-    if not rows:
-        return "No upcoming reminders."
+    if not details:
+        return f"Could not find Steam app details for App ID {app_id}."
 
-    lines = ["Upcoming reminders:"]
-    for (_id, app_id, name, release_at_utc) in rows:
-        lines.append(f"- **{name}** (App {app_id}) — {format_release_mt(release_at_utc)}")
-    return "\n".join(lines)
+    release_text = (details.release_date_text or "").strip() or None
+    if release_text:
+        release_iso, precision = parse_steam_release_date(release_text)
+    else:
+        release_iso, precision = (None, "unknown")
+
+    def _db_add_or_skip() -> bool:
+        conn = connect_guild_db(guild_id)
+        try:
+            purge_expired_reminders(conn)
+            return add_reminder_if_missing(
+                conn,
+                app_id=app_id,
+                name=details.name,
+                release_at_utc=release_iso,
+                release_date_text=release_text,
+                release_precision=precision,
+                created_by_discord_id=str(author_id),
+                remind_channel_id=int(channel_id),
+            )
+        finally:
+            conn.close()
+
+    inserted = await asyncio.to_thread(_db_add_or_skip)
+
+    when = release_text or "TBA"
+    if not inserted:
+        return f"ℹ️ Reminder already exists: **{details.name}** — {when}"
+    return f"✅ Reminder added: **{details.name}** — {when}\n{details.store_url}"
