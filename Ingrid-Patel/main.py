@@ -8,6 +8,10 @@ from datetime import datetime, timedelta, timezone
 import requests
 import re
 from bs4 import BeautifulSoup
+from ingrid_patel.commands.reminders import handle_addreminder, handle_listreminders
+from ingrid_patel.services.reminder_scheduler import check_and_collect_due_reminders
+
+
 
 # Path setup for cross-platform compatibility
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +40,45 @@ intents.message_content = True
 # Define the client with the intents
 client = Client(intents=intents)
 
+from discord.ext import tasks
+
+@tasks.loop(seconds=60)
+async def reminder_tick():
+    print(f"[reminders] tick; guilds={len(client.guilds)}")
+
+    for guild in client.guilds:
+        rows = check_and_collect_due_reminders(guild.id)
+        if not rows:
+            continue
+
+        # For now: send to the one hardcoded channel you already use
+        channel = client.get_channel(specific_channel_id)
+        if not channel:
+            print(f"[reminders] WARNING: channel {specific_channel_id} not found")
+            continue
+
+        for r in rows:
+            # rows shape depends on what your scheduler returns.
+            # Most likely you have (id, app_id, name, release_at_utc)
+            _, app_id, name, release_at_utc = r
+
+            await channel.send(
+                f"⏰ **Reminder:** `{name}` (Steam AppID `{app_id}`) is releasing soon! "
+                f"(release UTC: `{release_at_utc}`)"
+            )
+
+
+@reminder_tick.before_loop
+async def before_reminder_tick():
+    # make sure discord cache is ready before first tick
+    await client.wait_until_ready()
+    print("[reminders] before_loop: ready")
+
+@reminder_tick.error
+async def reminder_tick_error(exc):
+    print(f"[reminders] ERROR: {exc!r}")
+
+
 _http = requests.Session()
 
 version = "5.3.1"  # Change this to the version you are working on whenever you modify the code and push to github
@@ -45,11 +88,11 @@ specific_channel_id = 1268026496027459715  # Testing channel is 1268026496027459
 # Load Radarr API settings from .env (if not already loaded)
 RADARR_BASE_URL = os.getenv('RADARR_BASE_URL')
 RADARR_API_KEY = os.getenv('RADARR_API_KEY')
-RADARR_ROOT_FOLDER = os.getenv('RADARR_ROOT_FOLDER', r"M:\media\Movies")
+RADARR_ROOT_FOLDER = os.getenv('RADARR_ROOT_FOLDER', r"\\cobalt\media\Movies")
 # Load Sonarr API settings from .env (if not already loaded)
 SONARR_BASE_URL = os.getenv('SONARR_BASE_URL').strip()
 SONARR_API_KEY = os.getenv('SONARR_API_KEY').strip()
-SONARR_ROOT_FOLDER = os.getenv('SONARR_ROOT_FOLDER', r"M:\media\Shows").strip()
+SONARR_ROOT_FOLDER = os.getenv('SONARR_ROOT_FOLDER', r"\\cobalt\media\Shows").strip()
 
 
 # Global variable to track a pending movie approval request.
@@ -76,6 +119,11 @@ async def on_ready():
         else:
             logging.warning("Channel not found on startup")
         logging.info(f'{client.user} is now running!')
+        if not reminder_tick.is_running():
+            reminder_tick.start()
+
+
+
 
 # STEP 2: DEFINE FUNCTIONS
 
@@ -753,43 +801,83 @@ def prepare_sonarr_payload(lookup_data, root_folder, quality_profile_id=1):
     return lookup_data
 
 def radarr_add_movie(movie_id):
-    url = f"{RADARR_BASE_URL}/api/v3/movie"
-    headers = {"Content-Type": "application/json", "X-Api-Key": RADARR_API_KEY}
-    payload = {
-        "tmdbId": movie_id,
-        "monitored": True,
-        "qualityProfileId": 2,  # Adjust as needed (1080p profile ID)
-        "rootFolderPath": RADARR_ROOT_FOLDER, 
-        "minimumAvailability": "released"
-    }
+    """
+    Add a movie to Radarr by TMDb ID using the recommended
+    lookup -> construct payload -> POST flow.
+    """
+    headers = {"X-Api-Key": RADARR_API_KEY}
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.ok:
-            logging.info(f"Movie with TMDb ID {movie_id} added to Plex download queue.")
-            return response.json()
-        else:
-            try:
-                error_data = response.json()
-                # Handle list of errors
-                if isinstance(error_data, list):
-                    error_messages = [err.get('message', '').lower() for err in error_data if isinstance(err, dict)]
-                    combined_message = " | ".join(error_messages)
-                    logging.error(f"Radarr returned error(s): {combined_message}")
-                    if any("already" in msg or "exists" in msg for msg in error_messages):
-                        logging.info(f"Movie with TMDb ID {movie_id} is already monitored in Radarr.")
-                        return {"error": "Movie already monitored in Plex download queue."}
-                else:
-                    error_message = error_data.get("message", "").lower()
-                    logging.error(f"Radarr returned error: {error_message}")
-                    if "already" in error_message or "exists" in error_message:
-                        logging.info(f"Movie with TMDb ID {movie_id} is already monitored in Radarr.")
-                        return {"error": "Movie already monitored in Plex download queue."}
-            except Exception as e:
-                logging.error(f"Error parsing Radarr error response: {e}")
-            logging.error(f"Failed to add movie. Status code: {response.status_code}")
+        # 1) Lookup the movie to get title/year/titleSlug/images/etc.
+        lu_url = f"{RADARR_BASE_URL}/api/v3/movie/lookup"
+        lu_params = {"term": f"tmdb:{movie_id}"}
+        lu_resp = requests.get(lu_url, headers=headers, params=lu_params, timeout=(5, 10))
+        if lu_resp.status_code != 200:
+            logging.error(f"[RADARR] lookup failed {lu_resp.status_code}: {lu_resp.text}")
             return None
+
+        results = lu_resp.json()
+        if not results:
+            logging.error("[RADARR] lookup returned no results")
+            return None
+
+        m = results[0]
+
+        # 2) Build payload from the lookup object
+        payload = {
+            "tmdbId": m.get("tmdbId", movie_id),
+            "title": m.get("title"),
+            "year": m.get("year"),
+            "titleSlug": m.get("titleSlug"),
+            "images": m.get("images", []),
+            "monitored": True,
+            "qualityProfileId": 2,             # keep if you're sure; else swap to your confirmed ID
+            "rootFolderPath": RADARR_ROOT_FOLDER,
+            "addOptions": {"searchForMovie": True},
+            # optional but sometimes useful:
+            "minimumAvailability": "released"
+        }
+
+        # Basic validation to avoid empty required fields
+        for k in ("title", "titleSlug"):
+            if not payload.get(k):
+                logging.error(f"[RADARR] missing required field '{k}' in lookup data: {m}")
+                return None
+
+        # 3) POST to /movie
+        add_url = f"{RADARR_BASE_URL}/api/v3/movie"
+        resp = requests.post(add_url, headers={**headers, "Content-Type":"application/json"},
+                             json=payload, timeout=(5, 15))
+
+        if resp.ok:
+            logging.info(f"[RADARR] Added TMDb {movie_id}: {payload['title']} ({payload.get('year')})")
+            return resp.json()
+
+        # Parse Radarr error shapes (list or object)
+        try:
+            err = resp.json()
+            if isinstance(err, list):
+                msgs = []
+                for e in err:
+                    # Radarr may return fields like 'message', 'errorMessage', 'propertyName'
+                    msgs.append(e.get("message") or e.get("errorMessage") or str(e))
+                combined = " | ".join(msgs)
+                logging.error(f"[RADARR] add failed {resp.status_code}: {combined}")
+                if any("already" in s.lower() or "exists" in s.lower() for s in msgs):
+                    return {"error": "Movie already monitored in Plex download queue."}
+            elif isinstance(err, dict):
+                msg = err.get("message") or err.get("errorMessage") or str(err)
+                logging.error(f"[RADARR] add failed {resp.status_code}: {msg}")
+                if "already" in msg.lower() or "exists" in msg.lower():
+                    return {"error": "Movie already monitored in Plex download queue."}
+            else:
+                logging.error(f"[RADARR] add failed {resp.status_code}: {resp.text}")
+        except Exception:
+            logging.error(f"[RADARR] add failed {resp.status_code}: {resp.text}")
+
+        return None
+
     except Exception as e:
-        logging.error(f"Error adding movie to Radarr: {e}")
+        logging.exception(f"[RADARR] exception adding movie {movie_id}: {e}")
         return None
 
 
@@ -903,6 +991,27 @@ async def on_message(message):
         return
 
     content = message.content.lower()
+
+    if content.startswith("*addreminder"):
+        if not message.guild:
+            await message.channel.send("This command only works in a server (not DMs).")
+            return
+        response = handle_addreminder(
+            guild_id=message.guild.id,
+            author_id=message.author.id,
+            content=message.content,  # keep original case for parsing
+        )
+        await message.channel.send(response)
+        return
+
+    if content == "*listreminders":
+        if not message.guild:
+            await message.channel.send("This command only works in a server (not DMs).")
+            return
+        response = handle_listreminders(guild_id=message.guild.id)
+        await message.channel.send(response)
+        return
+
     
     # Command to fetch game attributes and Steam URL
     if content.startswith("*search"):
