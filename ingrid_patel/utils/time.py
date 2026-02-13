@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -74,6 +75,130 @@ _PRECISION_QUARTER = "quarter"
 _PRECISION_SEASON = "season"
 _PRECISION_YEAR = "year"
 
+_MONTH_ALIASES: dict[str, int] = {
+    # English
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+    # Portuguese
+    "fev": 2,
+    "fevereiro": 2,
+    "abr": 4,
+    "abril": 4,
+    "mai": 5,
+    "maio": 5,
+    "ago": 8,
+    "set": 9,
+    "setembro": 9,
+    "out": 10,
+    "outubro": 10,
+    "dez": 12,
+    "dezembro": 12,
+    # French
+    "janv": 1,
+    "janvier": 1,
+    "fevr": 2,
+    "fevrier": 2,
+    "mars": 3,
+    "avr": 4,
+    "avril": 4,
+    "mai": 5,
+    "juin": 6,
+    "juil": 7,
+    "juillet": 7,
+    "aout": 8,
+    "septembre": 9,
+    "octobre": 10,
+    "novembre": 11,
+    "decembre": 12,
+    # Spanish
+    "ene": 1,
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+    # German
+    "januar": 1,
+    "februar": 2,
+    "maerz": 3,
+    "marz": 3,
+    "mai": 5,
+    "juni": 6,
+    "juli": 7,
+    "okt": 10,
+    "oktober": 10,
+    "dezember": 12,
+}
+
+
+def _normalize_month_token(token: str) -> str:
+    # Remove accents/punctuation so "fev.", "fév.", "févr." normalize predictably.
+    t = unicodedata.normalize("NFKD", token or "")
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    t = t.lower().strip().strip(".")
+    t = re.sub(r"[^a-z0-9]", "", t)
+    return t
+
+
+def _parse_localized_dmy(date_text: str) -> str | None:
+    """
+    Parse localized day/month/year variants such as:
+      - 26/fev./2026
+      - 26/feb/2026
+      - 26/02/2026
+    """
+    m = re.fullmatch(r"(\d{1,2})\s*/\s*([^/\s]+)\s*/\s*(\d{4})", (date_text or "").strip(), re.IGNORECASE)
+    if not m:
+        return None
+
+    day = int(m.group(1))
+    month_part = (m.group(2) or "").strip()
+    year = int(m.group(3))
+
+    month_num: int | None
+    if month_part.isdigit():
+        month_num = int(month_part)
+    else:
+        month_num = _MONTH_ALIASES.get(_normalize_month_token(month_part))
+
+    if not month_num or not (1 <= month_num <= 12):
+        return None
+
+    try:
+        dt = datetime(year, month_num, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
 
 def parse_steam_release_date(date_text: str) -> tuple[str | None, str]:
     """
@@ -112,6 +237,10 @@ def parse_steam_release_date(date_text: str) -> tuple[str | None, str]:
             return dt.isoformat(), _PRECISION_DAY
         except ValueError:
             pass
+
+    localized_iso = _parse_localized_dmy(s_norm)
+    if localized_iso:
+        return localized_iso, _PRECISION_DAY
 
     # 2) Month + year (e.g. "May 2026", "Sep 2026") -> anchor at first day UTC
     m = re.fullmatch(r"([A-Za-z]+)\s+(\d{4})", s_norm)

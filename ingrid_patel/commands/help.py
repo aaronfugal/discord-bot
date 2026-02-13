@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 HELP_TEXT = (
-    "## 🤖 Bot Help\n"
+    "## 🤖 Ingrid Patel (6.0.1) Help\n"
     "\n"
     "### 🔎 Search\n"
     "- `*searchgame <game name>` — Search Steam games. Results show clickable store links + buttons to view details.\n"

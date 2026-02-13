@@ -16,11 +16,11 @@ from zoneinfo import ZoneInfo
 
 from ingrid_patel.bootstrap import load_env
 from ingrid_patel.services import scheduler
-from ingrid_patel.utils.time import utc_now, parse_iso, parse_steam_release_date
+from ingrid_patel.utils.time import utc_now, utc_now_iso, parse_iso, parse_steam_release_date
 from ingrid_patel.commands.reminders import add_reminder_for_appid
 from ingrid_patel.commands.router import CommandContext, dispatch_command
 from ingrid_patel.db.connect import connect_guild_db
-from ingrid_patel.db.repos.settings_repo import get_setting
+from ingrid_patel.db.repos.settings_repo import get_setting, set_setting
 from ingrid_patel.db.repos.wishlist_repo import (
     is_in_wishlist,
     add_to_wishlist_if_missing,
@@ -36,9 +36,19 @@ from ingrid_patel.db.repos.reminders_repo import reminder_exists, remove_reminde
 from ingrid_patel.settings import (
     owner_ids,
     HTTP_TIMEOUT_SECONDS,
+    TESTING_MODE,
+    TEST_GUILD_ID,
+    TEST_CHANNEL_ID,
+    TEST_TIMEZONE,
+    TESTING_USE_SEPARATE_DB,
+    SEARCH_RESULTS_TTL_SECONDS,
+    RESTRICT_SEARCH_BUTTONS_TO_AUTHOR,
+    USER_ERROR_MESSAGE,
 )
 
 log = logging.getLogger(__name__)
+AUTO_DELETE_BULK_NOTICE_EVERY = 7
+AUTO_DELETE_BULK_NOTICE_TEXT = "*Bulk messages are auto-deleted. Re-run commands to query again*"
 
 
 def _steam_header_img(app_id: int) -> str:
@@ -88,7 +98,70 @@ def _safe_int(x: Any) -> Optional[int]:
         return None
 
 
+def _is_testing_scope(guild_id: int, channel_id: int | None = None) -> bool:
+    if not TESTING_MODE:
+        return True
+    if int(guild_id) != int(TEST_GUILD_ID):
+        return False
+    if channel_id is None:
+        return True
+    return int(channel_id) == int(TEST_CHANNEL_ID)
+
+
+def _search_delete_after() -> float | None:
+    ttl = int(SEARCH_RESULTS_TTL_SECONDS or 0)
+    return float(ttl) if ttl > 0 else None
+
+
+async def _delete_message_after_delay(client: "BotClient", msg: discord.Message, delay_s: float) -> None:
+    if delay_s <= 0:
+        return
+
+    try:
+        await asyncio.sleep(delay_s)
+        await msg.delete()
+    except (discord.NotFound, discord.Forbidden):
+        return
+    except Exception:
+        log.exception("Failed auto-delete for message id=%s", getattr(msg, "id", None))
+        return
+
+    try:
+        await client.note_auto_deleted(msg.channel)
+    except Exception:
+        log.exception("Failed to track auto-deleted message")
+
+
+async def _send_with_auto_delete(
+    client: "BotClient",
+    channel: Any,
+    *,
+    delete_after: float | None = None,
+    **send_kwargs: Any,
+) -> Any:
+    msg = await channel.send(**send_kwargs)
+    if delete_after and delete_after > 0:
+        asyncio.create_task(_delete_message_after_delay(client, msg, float(delete_after)))
+    return msg
+
+
+def _bootstrap_testing_mode_settings() -> None:
+    """
+    Ensure testing mode always starts with the intended channel/timezone.
+    Writes to the active DATA_DIR (production or isolated testing dir).
+    """
+    conn = connect_guild_db(int(TEST_GUILD_ID))
+    try:
+        set_setting(conn, "allowed_channel_id", str(int(TEST_CHANNEL_ID)))
+        set_setting(conn, "timezone", str(TEST_TIMEZONE))
+    finally:
+        conn.close()
+
+
 def _get_allowed_channel_id(guild_id: int) -> int | None:
+    if TESTING_MODE:
+        return int(TEST_CHANNEL_ID) if int(guild_id) == int(TEST_GUILD_ID) else None
+
     conn = connect_guild_db(int(guild_id))
     try:
         val = get_setting(conn, "allowed_channel_id")
@@ -422,11 +495,41 @@ def _build_result_embeds(kind: str, payload: dict[str, Any]) -> list[Embed]:
     return embeds[:10] or [Embed(title="No results", description=f"No results for: `{query}`")]
 
 
+async def _notify_admin_and_send_generic_error(
+    client: "BotClient",
+    *,
+    channel: Any,
+    guild_id: int,
+    channel_id: int,
+    user_id: int | None,
+    context: str,
+    detail: str | None = None,
+) -> None:
+    try:
+        await client.dm_admin_runtime_error(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            context=context,
+            detail=detail,
+        )
+    except Exception:
+        log.exception("Failed to notify admin for runtime error")
+
+    try:
+        await channel.send(USER_ERROR_MESSAGE)
+    except Exception:
+        log.exception("Failed to send generic user error message")
+
+
 class BotClient(Client):
     def __init__(self, *, intents: Intents) -> None:
         super().__init__(intents=intents)
         self.http_session: aiohttp.ClientSession | None = None
         self._request_cooldown: dict[tuple[int, int], datetime] = {}
+        self._error_cooldown: dict[tuple[int, str], datetime] = {}
+        self._auto_deleted_count = 0
+        self._auto_delete_lock = asyncio.Lock()
 
     async def ensure_http_session(self) -> aiohttp.ClientSession:
         if self.http_session and not self.http_session.closed:
@@ -490,6 +593,74 @@ class BotClient(Client):
                 log.exception("Failed to DM admin_id=%s", admin_id)
 
         return sent_any
+
+    async def dm_admin_runtime_error(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        user_id: int | None,
+        context: str,
+        detail: str | None = None,
+    ) -> bool:
+        key = (int(guild_id), (context or "").strip()[:100].lower())
+        now = utc_now()
+        last = self._error_cooldown.get(key)
+        if last and (now - last) < timedelta(minutes=2):
+            return True
+        self._error_cooldown[key] = now
+
+        gids = owner_ids()
+        if not gids:
+            return False
+
+        guild = self.get_guild(guild_id)
+        guild_name = guild.name if guild else str(guild_id)
+        ch_hint = f"<#{channel_id}>" if channel_id else f"(channel {channel_id})"
+
+        detail_line = ""
+        if detail:
+            detail_clean = _truncate(detail.replace("\n", " "), 600)
+            detail_line = f"\n- **Detail:** `{detail_clean}`"
+
+        user_line = ""
+        if user_id is not None:
+            user_line = f"- **User:** <@{user_id}> (`{user_id}`)\n"
+
+        msg = (
+            "🚨 **Bot error reported**\n"
+            f"- **Guild:** {guild_name}\n"
+            f"{user_line}"
+            f"- **Channel:** {ch_hint}\n"
+            f"- **Context:** `{_truncate((context or '').strip(), 180)}`\n"
+            f"- **UTC:** `{utc_now_iso()}`"
+            f"{detail_line}"
+        )
+
+        sent_any = False
+        for admin_id in gids:
+            try:
+                user = await self.fetch_user(admin_id)
+                await user.send(msg)
+                sent_any = True
+            except Exception:
+                log.exception("Failed to DM admin runtime error admin_id=%s", admin_id)
+
+        return sent_any
+
+    async def note_auto_deleted(self, channel: Any) -> None:
+        announce = False
+        async with self._auto_delete_lock:
+            self._auto_deleted_count += 1
+            announce = (self._auto_deleted_count % AUTO_DELETE_BULK_NOTICE_EVERY) == 0
+
+        if not announce:
+            return
+
+        try:
+            await channel.send(AUTO_DELETE_BULK_NOTICE_TEXT)
+        except Exception:
+            log.exception("Failed to send auto-delete bulk notice")
 
 
 def create_client() -> BotClient:
@@ -633,7 +804,14 @@ class GameDetailActionsView(discord.ui.View):
                 "Reminder toggle failed app_id=%s guild=%s channel=%s",
                 self.app_id, self.guild_id, self.channel_id
             )
-            await interaction.channel.send("⚠️ Reminder update failed. Check logs.")
+            await _notify_admin_and_send_generic_error(
+                self.client,
+                channel=interaction.channel,
+                guild_id=self.guild_id,
+                channel_id=self.channel_id,
+                user_id=int(interaction.user.id),
+                context=f"toggle_reminder app_id={self.app_id}",
+            )
 
     async def toggle_wishlist(self, interaction: Interaction) -> None:
         await interaction.response.defer()
@@ -685,7 +863,14 @@ class GameDetailActionsView(discord.ui.View):
 
         except Exception:
             log.exception("Wishlist toggle failed app_id=%s guild=%s channel=%s", self.app_id, self.guild_id, self.channel_id)
-            await interaction.channel.send("⚠️ Wishlist update failed. Check logs.")
+            await _notify_admin_and_send_generic_error(
+                self.client,
+                channel=interaction.channel,
+                guild_id=self.guild_id,
+                channel_id=self.channel_id,
+                user_id=int(interaction.user.id),
+                context=f"toggle_wishlist app_id={self.app_id}",
+            )
 
 
 class ResultButtonsView(discord.ui.View):
@@ -704,8 +889,8 @@ class ResultButtonsView(discord.ui.View):
             self.add_item(_ResultButton(index=i, label=f"{i+1}"))
 
     async def interaction_check(self, interaction: Interaction) -> bool:
-        if self._author_id and interaction.user.id != self._author_id:
-            await interaction.response.send_message("This menu isn’t for you. Run your own search.")
+        if RESTRICT_SEARCH_BUTTONS_TO_AUTHOR and self._author_id and interaction.user.id != self._author_id:
+            await interaction.response.send_message("This menu isn’t for you. Run your own search.", ephemeral=True)
             return False
         return True
 
@@ -768,7 +953,13 @@ class ResultButtonsView(discord.ui.View):
 
             if kind in ("GAME_SEARCH", "MOVIE_SEARCH", "SHOW_SEARCH"):
                 view = ResultButtonsView(self.client, kind, payload)
-                await interaction.channel.send(embeds=embeds, view=view)
+                await _send_with_auto_delete(
+                    self.client,
+                    interaction.channel,
+                    embeds=embeds,
+                    view=view,
+                    delete_after=_search_delete_after(),
+                )
                 return
 
             if kind == "GAME_DETAIL":
@@ -802,7 +993,13 @@ class ResultButtonsView(discord.ui.View):
                     in_wishlist=in_wl,
                     in_reminders=in_rem,
                 )
-                await interaction.channel.send(embeds=embeds, view=view)
+                await _send_with_auto_delete(
+                    self.client,
+                    interaction.channel,
+                    embeds=embeds,
+                    view=view,
+                    delete_after=_search_delete_after(),
+                )
                 return
 
         # Access request flow
@@ -839,7 +1036,15 @@ class ResultButtonsView(discord.ui.View):
                 await interaction.channel.send(f"ℹ️ {pretty or 'Movie'} already added (on Plex or in the download queue).")
                 return
             if out.startswith("Failed."):
-                await interaction.channel.send(f"❌ Failed to add {pretty or 'movie'}. ({out})")
+                await _notify_admin_and_send_generic_error(
+                    self.client,
+                    channel=interaction.channel,
+                    guild_id=interaction.guild_id or 0,
+                    channel_id=interaction.channel_id or 0,
+                    user_id=int(interaction.user.id),
+                    context=cmd,
+                    detail=out,
+                )
                 return
 
         if cmd.startswith("*plexshow "):
@@ -850,7 +1055,15 @@ class ResultButtonsView(discord.ui.View):
                 await interaction.channel.send(f"ℹ️ {pretty or 'Show'} already added (on Plex or in the download queue).")
                 return
             if out.startswith("Failed."):
-                await interaction.channel.send(f"❌ Failed to add {pretty or 'show'}. ({out})")
+                await _notify_admin_and_send_generic_error(
+                    self.client,
+                    channel=interaction.channel,
+                    guild_id=interaction.guild_id or 0,
+                    channel_id=interaction.channel_id or 0,
+                    user_id=int(interaction.user.id),
+                    context=cmd,
+                    detail=out,
+                )
                 return
 
         await interaction.channel.send(out)
@@ -890,6 +1103,9 @@ async def _should_process_message(client: BotClient, message: discord.Message, c
         return False
 
     guild_id = int(message.guild.id)
+    if not _is_testing_scope(guild_id, int(message.channel.id)):
+        return False
+
     allowed = _get_allowed_channel_id(guild_id)
 
     # Not configured yet
@@ -940,13 +1156,27 @@ async def _handle_dispatch_output(
             has_results = isinstance(results, list) and len(results) > 0
 
             if has_results:
-                await message.channel.send(
-                    "**CLICK A TITLE TO OPEN STEAM. USE THE NUMBERED BUTTONS BELOW TO VIEW DETAILS IN DISCORD.**"
+                await _send_with_auto_delete(
+                    client,
+                    message.channel,
+                    content="**CLICK A TITLE TO OPEN STEAM. USE THE NUMBERED BUTTONS BELOW TO VIEW DETAILS IN DISCORD.**",
+                    delete_after=_search_delete_after(),
                 )
                 view = ResultButtonsView(client, kind, payload)
-                await message.channel.send(embeds=embeds, view=view)
+                await _send_with_auto_delete(
+                    client,
+                    message.channel,
+                    embeds=embeds,
+                    view=view,
+                    delete_after=_search_delete_after(),
+                )
             else:
-                await message.channel.send(embeds=embeds)
+                await _send_with_auto_delete(
+                    client,
+                    message.channel,
+                    embeds=embeds,
+                    delete_after=_search_delete_after(),
+                )
             return
 
         if kind == "WISHLIST":
@@ -960,7 +1190,13 @@ async def _handle_dispatch_output(
 
         if kind in ("MOVIE_SEARCH", "SHOW_SEARCH"):
             view = ResultButtonsView(client, kind, payload)
-            await message.channel.send(embeds=embeds, view=view)
+            await _send_with_auto_delete(
+                client,
+                message.channel,
+                embeds=embeds,
+                view=view,
+                delete_after=_search_delete_after(),
+            )
             return
 
         if kind == "GAME_DETAIL":
@@ -994,7 +1230,13 @@ async def _handle_dispatch_output(
                 in_wishlist=in_wl,
                 in_reminders=in_rem,
             )
-            await message.channel.send(embeds=embeds, view=view)
+            await _send_with_auto_delete(
+                client,
+                message.channel,
+                embeds=embeds,
+                view=view,
+                delete_after=_search_delete_after(),
+            )
             return
 
     # --- Access request flow ---
@@ -1111,7 +1353,15 @@ async def _handle_dispatch_output(
             await message.channel.send("ℹ️ Movie already added (on Plex or in the download queue).")
             return
         if resp.startswith("Failed."):
-            await message.channel.send(f"❌ Failed to add movie. ({resp})")
+            await _notify_admin_and_send_generic_error(
+                client,
+                channel=message.channel,
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                context=content,
+                detail=resp,
+            )
             return
 
     if content.startswith("*plexshow "):
@@ -1122,11 +1372,28 @@ async def _handle_dispatch_output(
             await message.channel.send("ℹ️ Show already added (on Plex or in the download queue).")
             return
         if resp.startswith("Failed."):
-            await message.channel.send(f"❌ Failed to add show. ({resp})")
+            await _notify_admin_and_send_generic_error(
+                client,
+                channel=message.channel,
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                context=content,
+                detail=resp,
+            )
             return
 
 
     # default: plain text response
+    if content.strip().lower().startswith("*help"):
+        await _send_with_auto_delete(
+            client,
+            message.channel,
+            content=resp,
+            delete_after=_search_delete_after(),
+        )
+        return
+
     await message.channel.send(resp)
 
 
@@ -1169,20 +1436,33 @@ def run() -> None:
     async def on_ready() -> None:
         await client.ensure_http_session()
         log.info("Bot connected as %s", client.user)
+        if TESTING_MODE:
+            try:
+                _bootstrap_testing_mode_settings()
+            except Exception:
+                log.exception(
+                    "[testing] failed to bootstrap test settings guild=%s channel=%s tz=%s",
+                    TEST_GUILD_ID,
+                    TEST_CHANNEL_ID,
+                    TEST_TIMEZONE,
+                )
+            else:
+                db_mode = "isolated testing DB" if TESTING_USE_SEPARATE_DB else "shared production DB"
+                log.info(
+                    "[testing] bootstrapped settings guild=%s channel=%s timezone=%s (%s)",
+                    TEST_GUILD_ID,
+                    TEST_CHANNEL_ID,
+                    TEST_TIMEZONE,
+                    db_mode,
+                )
+            log.info(
+                "[testing] mode enabled: only guild=%s channel=%s will be processed",
+                TEST_GUILD_ID,
+                TEST_CHANNEL_ID,
+            )
 
         # Start scheduler (it will only run for guilds with timezone configured)
         scheduler.start(client)
-
-        # Startup message to each guild's allowed channel, if configured
-        for g in client.guilds:
-            try:
-                allowed = _get_allowed_channel_id(g.id)
-                if not allowed:
-                    continue
-                ch = client.get_channel(int(allowed)) or await client.fetch_channel(int(allowed))
-                await ch.send("I am back online.")
-            except Exception:
-                log.exception("Startup message failed for guild=%s", g.id)
 
     @client.event
     async def on_message(message) -> None:
@@ -1215,7 +1495,14 @@ def run() -> None:
 
         except Exception:
             log.exception("Command execution failed")
-            await message.channel.send("⚠️ Command failed. Check logs for details.")
+            await _notify_admin_and_send_generic_error(
+                client,
+                channel=message.channel,
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                context=content,
+            )
 
 
     client.run(token)
