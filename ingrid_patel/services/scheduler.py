@@ -23,6 +23,12 @@ from ingrid_patel.db.repos.reminders_repo import (
     update_release_fields,
 )
 from ingrid_patel.utils.time import parse_steam_release_date
+from ingrid_patel.settings import (
+    TESTING_MODE,
+    TEST_GUILD_ID,
+    TEST_CHANNEL_ID,
+    TEST_TIMEZONE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +40,9 @@ def _get_guild_timezone(guild_id: int) -> str | None:
     """
     Returns stored IANA timezone name (settings.timezone) or None if not configured.
     """
+    if TESTING_MODE and int(guild_id) == int(TEST_GUILD_ID):
+        return str(TEST_TIMEZONE)
+
     conn = connect_guild_db(guild_id)
     try:
         tz = (get_setting(conn, "timezone") or "").strip()
@@ -46,6 +55,9 @@ def _get_guild_allowed_channel_id(guild_id: int) -> int | None:
     """
     Returns stored allowed channel id (settings.allowed_channel_id) or None if not configured.
     """
+    if TESTING_MODE:
+        return int(TEST_CHANNEL_ID) if int(guild_id) == int(TEST_GUILD_ID) else None
+
     conn = connect_guild_db(guild_id)
     try:
         v = (get_setting(conn, "allowed_channel_id") or "").strip()
@@ -267,14 +279,17 @@ async def _run_reminders_for_guild(client: Client, guild_id: int, tz_name: str, 
             # 3) otherwise skip (setup required)
             target_channel_id: int | None = None
 
-            try:
-                if remind_channel_id is not None and int(remind_channel_id) > 0:
-                    target_channel_id = int(remind_channel_id)
-            except Exception:
-                target_channel_id = None
+            if TESTING_MODE:
+                target_channel_id = int(TEST_CHANNEL_ID)
+            else:
+                try:
+                    if remind_channel_id is not None and int(remind_channel_id) > 0:
+                        target_channel_id = int(remind_channel_id)
+                except Exception:
+                    target_channel_id = None
 
-            if target_channel_id is None:
-                target_channel_id = fallback_channel_id
+                if target_channel_id is None:
+                    target_channel_id = fallback_channel_id
 
             if target_channel_id is None:
                 log.warning("[reminders] no channel configured rid=%s guild=%s (run *setchannel)", rid, guild_id)
@@ -285,7 +300,7 @@ async def _run_reminders_for_guild(client: Client, guild_id: int, tz_name: str, 
                 log.warning("[reminders] channel %s not found guild=%s", target_channel_id, guild_id)
                 continue
 
-            msg = f"**{name}** is coming out tomorrow! https://store.steampowered.com/app/{app_id}"
+            msg = f"**{name}** is coming out soon! https://store.steampowered.com/app/{app_id}"
 
             try:
                 await channel.send(msg)
@@ -345,6 +360,9 @@ async def _run_wishlist_for_guild(client: Client, guild_id: int, tz_name: str, l
     guild = client.get_guild(guild_id)
 
     for channel_id, items in by_channel.items():
+        if TESTING_MODE and int(channel_id) != int(TEST_CHANNEL_ID):
+            continue
+
         on_sale: list[dict[str, Any]] = []
 
         for app_id, _name in items:
@@ -438,6 +456,8 @@ async def _run_wishlist_for_guild(client: Client, guild_id: int, tz_name: str, l
 async def master_tick(client: Client) -> None:
     for g in client.guilds:
         guild_id = g.id
+        if TESTING_MODE and int(guild_id) != int(TEST_GUILD_ID):
+            continue
 
         tz_name = _get_guild_timezone(guild_id)
         if not tz_name:

@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 
 STEAM_STORE_BASE = "https://store.steampowered.com/app"
+STEAM_LOCALE_PARAMS = {"l": "english", "cc": "US"}
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ class SteamClient:
             return None
 
         url = "https://store.steampowered.com/api/appdetails"
-        payload = await self._get_json(url, params={"appids": app_id})
+        payload = await self._get_json(url, params={"appids": app_id, **STEAM_LOCALE_PARAMS})
 
         entry = payload.get(str(app_id))
         if not entry or not entry.get("success"):
@@ -181,7 +182,7 @@ class SteamClient:
             return None
 
         url = "https://store.steampowered.com/api/appdetails"
-        payload = await self._get_json(url, params={"appids": app_id})
+        payload = await self._get_json(url, params={"appids": app_id, **STEAM_LOCALE_PARAMS})
 
         entry = payload.get(str(app_id))
         if not entry or not entry.get("success"):
@@ -247,7 +248,7 @@ class SteamClient:
             return None
 
         url = "https://store.steampowered.com/api/appdetails"
-        payload = await self._get_json(url, params={"appids": app_id})
+        payload = await self._get_json(url, params={"appids": app_id, **STEAM_LOCALE_PARAMS})
 
         entry = payload.get(str(app_id))
         if not entry or not entry.get("success"):
