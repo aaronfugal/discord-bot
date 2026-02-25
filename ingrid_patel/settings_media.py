@@ -55,3 +55,11 @@ def get_sonarr_config() -> tuple[str, str, str] | None:
         return None
     return base, key, root
 
+
+def get_plex_config() -> tuple[str, str] | None:
+    base = (os.getenv("PLEX_BASE_URL") or "").strip()
+    token = (os.getenv("PLEX_TOKEN") or "").strip()
+    if not base or not token:
+        return None
+    return base, token
+

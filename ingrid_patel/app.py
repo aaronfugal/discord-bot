@@ -1029,11 +1029,18 @@ class ResultButtonsView(discord.ui.View):
 
         # Simplified success messages for ARR adds
         if cmd.startswith("*plexmovie "):
-            if out.startswith("Added."):
-                await interaction.channel.send(f"✅ {pretty or 'Movie'} added.")
+            if out.startswith("Added to download queue."):
+                await interaction.channel.send(
+                    f"✅ {pretty or 'Movie'} added to the download queue. It should be available in the next few weeks."
+                )
                 return
-            if out.startswith("Already added"):
-                await interaction.channel.send(f"ℹ️ {pretty or 'Movie'} already added (on Plex or in the download queue).")
+            if out.startswith("Already on Plex."):
+                await interaction.channel.send(f"ℹ️ {pretty or 'Movie'} is already on Plex.")
+                return
+            if out.startswith("Already in download queue."):
+                await interaction.channel.send(
+                    f"ℹ️ {pretty or 'Movie'} is already in the download queue. It should be available in the next few weeks."
+                )
                 return
             if out.startswith("Failed."):
                 await _notify_admin_and_send_generic_error(
@@ -1048,11 +1055,18 @@ class ResultButtonsView(discord.ui.View):
                 return
 
         if cmd.startswith("*plexshow "):
-            if out.startswith("Added."):
-                await interaction.channel.send(f"✅ {pretty or 'Show'} added.")
+            if out.startswith("Added to download queue."):
+                await interaction.channel.send(
+                    f"✅ {pretty or 'Show'} added to the download queue. It should be available in the next few weeks."
+                )
                 return
-            if out.startswith("Already added"):
-                await interaction.channel.send(f"ℹ️ {pretty or 'Show'} already added (on Plex or in the download queue).")
+            if out.startswith("Already on Plex."):
+                await interaction.channel.send(f"ℹ️ {pretty or 'Show'} is already on Plex.")
+                return
+            if out.startswith("Already in download queue."):
+                await interaction.channel.send(
+                    f"ℹ️ {pretty or 'Show'} is already in the download queue. It should be available in the next few weeks."
+                )
                 return
             if out.startswith("Failed."):
                 await _notify_admin_and_send_generic_error(
@@ -1346,11 +1360,14 @@ async def _handle_dispatch_output(
     
     # Simplified success messages for ARR adds (message-based commands)
     if content.startswith("*plexmovie "):
-        if resp.startswith("Added."):
-            await message.channel.send("✅ Movie added.")
+        if resp.startswith("Added to download queue."):
+            await message.channel.send("✅ Movie added to the download queue. It should be available in the next few weeks.")
             return
-        if resp.startswith("Already added"):
-            await message.channel.send("ℹ️ Movie already added (on Plex or in the download queue).")
+        if resp.startswith("Already on Plex."):
+            await message.channel.send("ℹ️ Movie is already on Plex.")
+            return
+        if resp.startswith("Already in download queue."):
+            await message.channel.send("ℹ️ Movie is already in the download queue. It should be available in the next few weeks.")
             return
         if resp.startswith("Failed."):
             await _notify_admin_and_send_generic_error(
@@ -1365,11 +1382,14 @@ async def _handle_dispatch_output(
             return
 
     if content.startswith("*plexshow "):
-        if resp.startswith("Added."):
-            await message.channel.send("✅ Show added.")
+        if resp.startswith("Added to download queue."):
+            await message.channel.send("✅ Show added to the download queue. It should be available in the next few weeks.")
             return
-        if resp.startswith("Already added"):
-            await message.channel.send("ℹ️ Show already added (on Plex or in the download queue).")
+        if resp.startswith("Already on Plex."):
+            await message.channel.send("ℹ️ Show is already on Plex.")
+            return
+        if resp.startswith("Already in download queue."):
+            await message.channel.send("ℹ️ Show is already in the download queue. It should be available in the next few weeks.")
             return
         if resp.startswith("Failed."):
             await _notify_admin_and_send_generic_error(

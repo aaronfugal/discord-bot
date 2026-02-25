@@ -4,6 +4,7 @@ from __future__ import annotations
 import aiohttp
 
 from ingrid_patel import settings_media as sm
+from ingrid_patel.clients.plex_client import PlexClient
 from ingrid_patel.clients.radarr_client import RadarrClient
 from ingrid_patel.clients.sonarr_client import SonarrClient
 
@@ -22,3 +23,11 @@ def sonarr(session: aiohttp.ClientSession) -> tuple[SonarrClient, str] | None:
         return None
     base, key, root = cfg
     return SonarrClient(base, key, session=session), root
+
+
+def plex(session: aiohttp.ClientSession) -> PlexClient | None:
+    cfg = sm.get_plex_config()
+    if not cfg:
+        return None
+    base, token = cfg
+    return PlexClient(base, token, session=session)

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import aiohttp
 
-from ingrid_patel.clients.media_factory import radarr, sonarr
+from ingrid_patel.clients.media_factory import plex, radarr, sonarr
+
+log = logging.getLogger(__name__)
+
+MEDIA_ADDED_TO_QUEUE = "Added to download queue. It should be available in the next few weeks."
+MEDIA_ALREADY_ON_PLEX = "Already on Plex."
+MEDIA_ALREADY_IN_QUEUE = "Already in download queue. It should be available in the next few weeks."
 
 
 def _join_args(content: str) -> str:
@@ -19,6 +26,13 @@ def _ui(kind: str, payload: dict[str, Any]) -> str:
     return "__UI__:" + kind + ":" + json.dumps(payload, ensure_ascii=False)
 
 
+def _safe_int(v: Any) -> int | None:
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+
 def _pick_poster(images) -> str | None:
     if not images or not isinstance(images, list):
         return None
@@ -28,6 +42,28 @@ def _pick_poster(images) -> str | None:
         if url.startswith("http://") or url.startswith("https://"):
             return url
     return None
+
+
+async def _movie_exists_in_plex(http: aiohttp.ClientSession, *, title: str, year: int | None) -> bool:
+    client = plex(http)
+    if not client or not title:
+        return False
+    try:
+        return await client.has_movie(title=title, year=year)
+    except Exception:
+        log.exception("Plex movie lookup failed title=%s year=%s", title, year)
+        return False
+
+
+async def _show_exists_in_plex(http: aiohttp.ClientSession, *, title: str, year: int | None) -> bool:
+    client = plex(http)
+    if not client or not title:
+        return False
+    try:
+        return await client.has_show(title=title, year=year)
+    except Exception:
+        log.exception("Plex show lookup failed title=%s year=%s", title, year)
+        return False
 
 
 async def handle_searchmovie(http: aiohttp.ClientSession, author_id: int, content: str) -> str:
@@ -131,8 +167,15 @@ async def handle_plexmovie(http: aiohttp.ClientSession, content: str) -> str:
         return f"Failed. {type(e).__name__}: {e}"
 
     if status == "already_added":
-        return "Already added."
-    return "Added."
+        existing = await client.get_movie_by_tmdb(tmdb_id)
+        title = (existing.get("title") or "").strip() if isinstance(existing, dict) else ""
+        year = _safe_int(existing.get("year")) if isinstance(existing, dict) else None
+
+        if await _movie_exists_in_plex(http, title=title, year=year):
+            return MEDIA_ALREADY_ON_PLEX
+        return MEDIA_ALREADY_IN_QUEUE
+
+    return MEDIA_ADDED_TO_QUEUE
 
 
 async def handle_plexshow(http: aiohttp.ClientSession, content: str) -> str:
@@ -164,5 +207,12 @@ async def handle_plexshow(http: aiohttp.ClientSession, content: str) -> str:
         return f"Failed. {type(e).__name__}: {e}"
 
     if status == "already_added":
-        return "Already added."
-    return "Added."
+        existing = await client.get_series_by_tvdb(tvdb_id)
+        title = (existing.get("title") or "").strip() if isinstance(existing, dict) else ""
+        year = _safe_int(existing.get("year")) if isinstance(existing, dict) else None
+
+        if await _show_exists_in_plex(http, title=title, year=year):
+            return MEDIA_ALREADY_ON_PLEX
+        return MEDIA_ALREADY_IN_QUEUE
+
+    return MEDIA_ADDED_TO_QUEUE
