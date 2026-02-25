@@ -300,7 +300,7 @@ async def _run_reminders_for_guild(client: Client, guild_id: int, tz_name: str, 
                 log.warning("[reminders] channel %s not found guild=%s", target_channel_id, guild_id)
                 continue
 
-            msg = f"**{name}** is coming out tomorrow! https://store.steampowered.com/app/{app_id}"
+            msg = f"**{name}** is coming out soon! https://store.steampowered.com/app/{app_id}"
 
             try:
                 await channel.send(msg)
