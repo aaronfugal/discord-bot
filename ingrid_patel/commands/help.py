@@ -1,9 +1,11 @@
 # ingrid_patel/commands/help.py
 from __future__ import annotations
 
+from ingrid_patel import APP_VERSION
+
 
 HELP_TEXT = (
-    "## 🤖 Ingrid Patel (6.0.1) Help\n"
+    f"## 🤖 Ingrid Patel ({APP_VERSION}) Help\n"
     "\n"
     "### 🔎 Search\n"
     "- `*searchgame <game name>` — Search Steam games. Results show clickable store links + buttons to view details.\n"
