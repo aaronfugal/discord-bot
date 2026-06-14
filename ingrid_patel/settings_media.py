@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_RADARR_ROOT = r"\\cobalt\media\Movies"
-DEFAULT_SONARR_ROOT = r"\\cobalt\media\Shows"
+DEFAULT_RADARR_ROOT = r"/media/Movies"
+DEFAULT_SONARR_ROOT = r"/media/Shows"
 
 
 def _normalize_root_folder(raw: str | None, default: str) -> str:

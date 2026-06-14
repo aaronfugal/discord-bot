@@ -12,7 +12,7 @@ BOT_OWNER_ID = {
 
 # Local testing override (single guild + single channel)
 # Toggle this before starting the bot.
-TESTING_MODE = False
+TESTING_MODE = True
 TEST_GUILD_ID = 1154925436703342604
 TEST_CHANNEL_ID = 1268026496027459715
 TEST_TIMEZONE = "America/Denver"

@@ -149,12 +149,12 @@ DISCORD_TOKEN=your_discord_bot_token
 STEAM_KEY=your_steam_api_key
 
 # Radarr
-RADARR_BASE_URL=http://radarr.local:7878
+RADARR_BASE_URL=http://{Radarr server IP}:7878
 RADARR_API_KEY=your_radarr_api_key
 RADARR_ROOT_FOLDER=/path/to/movies
 
 # Sonarr
-SONARR_BASE_URL=http://sonarr.local:8989
+SONARR_BASE_URL=http://{Sonarr server IP}:8989
 SONARR_API_KEY=your_sonarr_api_key
 SONARR_ROOT_FOLDER=/path/to/tv
 ```
